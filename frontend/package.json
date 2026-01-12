@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
+    "casper-js-sdk": "^5.0.8",
     "framer-motion": "^12.23.26",
     "next": "16.1.1",
     "react": "19.2.3",

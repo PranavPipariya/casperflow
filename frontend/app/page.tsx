@@ -1,13 +1,99 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { connectWallet, getAccountBalance, stakeCSPR, unstakeCSPR, getDeployStatus } from '../lib/casper'
 
 export default function Home() {
   const [step, setStep] = useState<'landing' | 'wallet' | 'app'>('landing')
   const [walletConnected, setWalletConnected] = useState(false)
+  const [publicKey, setPublicKey] = useState<string | null>(null)
+  const [balance, setBalance] = useState('0')
   const [view, setView] = useState<'stake' | 'portfolio'>('stake')
   const [stakeAmount, setStakeAmount] = useState('')
   const [totalStaked, setTotalStaked] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [txHash, setTxHash] = useState<string | null>(null)
+  const [txStatus, setTxStatus] = useState<string>('')
+
+  async function handleConnectWallet() {
+    setLoading(true)
+    try {
+      const pubKey = await connectWallet()
+      if (pubKey) {
+        setPublicKey(pubKey)
+        setWalletConnected(true)
+        setStep('app')
+        const bal = await getAccountBalance(pubKey)
+        setBalance(bal)
+      } else {
+        alert('Wallet connection failed. Please install CSPR.click extension.')
+      }
+    } catch (error) {
+      console.error(error)
+      alert('Failed to connect wallet')
+    }
+    setLoading(false)
+  }
+
+  async function handleStake() {
+    if (!publicKey || !stakeAmount || parseFloat(stakeAmount) <= 0) return
+
+    setLoading(true)
+    try {
+      const deployHash = await stakeCSPR(publicKey, stakeAmount)
+      setTxHash(deployHash)
+      setTxStatus('Pending')
+      alert(`Stake transaction submitted!\nDeploy Hash: ${deployHash}\n\nView on explorer: https://testnet.cspr.live/deploy/${deployHash}`)
+
+      // Poll for status
+      const interval = setInterval(async () => {
+        const status = await getDeployStatus(deployHash)
+        setTxStatus(status)
+        if (status === 'Success' || status === 'Failed') {
+          clearInterval(interval)
+          if (status === 'Success') {
+            setTotalStaked(prev => prev + parseFloat(stakeAmount))
+            setStakeAmount('')
+            const newBal = await getAccountBalance(publicKey)
+            setBalance(newBal)
+          }
+        }
+      }, 5000)
+    } catch (error: any) {
+      console.error(error)
+      alert(`Staking failed: ${error.message}`)
+    }
+    setLoading(false)
+  }
+
+  async function handleUnstake() {
+    if (!publicKey || totalStaked <= 0) return
+
+    setLoading(true)
+    try {
+      const deployHash = await unstakeCSPR(publicKey, totalStaked.toString(), false)
+      setTxHash(deployHash)
+      setTxStatus('Pending')
+      alert(`Unstake transaction submitted!\nDeploy Hash: ${deployHash}\n\nView on explorer: https://testnet.cspr.live/deploy/${deployHash}`)
+
+      const interval = setInterval(async () => {
+        const status = await getDeployStatus(deployHash)
+        setTxStatus(status)
+        if (status === 'Success' || status === 'Failed') {
+          clearInterval(interval)
+          if (status === 'Success') {
+            setTotalStaked(0)
+            const newBal = await getAccountBalance(publicKey)
+            setBalance(newBal)
+          }
+        }
+      }, 5000)
+    } catch (error: any) {
+      console.error(error)
+      alert(`Unstaking failed: ${error.message}`)
+    }
+    setLoading(false)
+  }
 
   // Landing Screen
   if (step === 'landing') {
@@ -267,11 +353,9 @@ export default function Home() {
           </div>
 
           <button
-            onClick={() => {
-              setWalletConnected(true)
-              setStep('app')
-            }}
-            className="w-full p-6 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-colors group"
+            onClick={handleConnectWallet}
+            disabled={loading}
+            className="w-full p-6 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-colors group disabled:opacity-50"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
@@ -323,7 +407,7 @@ export default function Home() {
               </button>
               <div className="pl-4 border-l border-zinc-800">
                 <div className="px-3 py-1 bg-zinc-900 rounded-full text-sm text-gray-400">
-                  {walletConnected && '0x268...fe3'}
+                  {publicKey && `${publicKey.slice(0, 6)}...${publicKey.slice(-4)}`}
                 </div>
               </div>
             </div>
@@ -346,7 +430,7 @@ export default function Home() {
                 />
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600">$0.00 USD</span>
-                  <span className="text-sm text-gray-600">Balance: 10,000 CSPR</span>
+                  <span className="text-sm text-gray-600">Balance: {balance} CSPR</span>
                 </div>
               </div>
 
@@ -355,7 +439,7 @@ export default function Home() {
                 {['100', '500', '1000', 'Max'].map((amt) => (
                   <button
                     key={amt}
-                    onClick={() => setStakeAmount(amt === 'Max' ? '10000' : amt)}
+                    onClick={() => setStakeAmount(amt === 'Max' ? balance : amt)}
                     className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 rounded-lg text-sm text-gray-400 transition-colors"
                   >
                     {amt}
@@ -384,17 +468,17 @@ export default function Home() {
 
             {/* Action */}
             <button
-              onClick={() => {
-                if (stakeAmount) {
-                  setTotalStaked(prev => prev + parseFloat(stakeAmount))
-                  setStakeAmount('')
-                }
-              }}
-              disabled={!stakeAmount || parseFloat(stakeAmount) <= 0}
+              onClick={handleStake}
+              disabled={!stakeAmount || parseFloat(stakeAmount) <= 0 || loading}
               className="w-full py-4 bg-white hover:bg-gray-100 disabled:bg-zinc-900 disabled:text-gray-600 text-black rounded-lg font-medium transition-colors disabled:cursor-not-allowed"
             >
-              Stake CSPR
+              {loading ? 'Processing...' : 'Stake CSPR'}
             </button>
+            {txHash && (
+              <div className="text-xs text-gray-500 text-center">
+                Status: {txStatus} | <a href={`https://testnet.cspr.live/deploy/${txHash}`} target="_blank" className="text-blue-400 hover:underline">View on Explorer</a>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -423,7 +507,7 @@ export default function Home() {
             </button>
             <div className="pl-4 border-l border-zinc-800">
               <div className="px-3 py-1 bg-zinc-900 rounded-full text-sm text-gray-400">
-                {walletConnected && '0x268...fe3'}
+                {publicKey && `${publicKey.slice(0, 6)}...${publicKey.slice(-4)}`}
               </div>
             </div>
           </div>
@@ -463,13 +547,11 @@ export default function Home() {
 
             {/* Unstake Button */}
             <button
-              onClick={() => {
-                setTotalStaked(0)
-                alert('Unstaked! Choose instant (0.5% fee) or standard (7 days) in production.')
-              }}
-              className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white rounded-lg font-medium transition-colors"
+              onClick={handleUnstake}
+              disabled={loading}
+              className="w-full py-4 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
             >
-              Unstake
+              {loading ? 'Processing...' : 'Unstake'}
             </button>
           </div>
         ) : (
